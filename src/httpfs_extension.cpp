@@ -105,6 +105,10 @@ static void LoadInternal(ExtensionLoader &loader) {
 	    "Whether globs on S3-like storage are optimized with recursive strategy (alterative is listing)",
 	    LogicalType::BOOLEAN, Value(true));
 
+	// S3 Access Grants config
+	config.AddExtensionOption("s3_access_grants_enabled", "Enable S3 Access grants", LogicalType::BOOLEAN,
+	                          Value(false));
+
 	// S3 Uploader config
 	config.AddExtensionOption("s3_uploader_max_filesize", "S3 Uploader max filesize (between 50GB and 5TB)",
 	                          LogicalType::VARCHAR, "800GB");
