@@ -175,7 +175,7 @@ string GetCurrentAccountId(HTTPParams &http_params, S3AuthParams &auth_params) {
 	auto headers = CreateS3Header("/", query, host, "sts", "GET", auth_params, "", "", "", "", "", "");
 	std::stringstream response;
 	GetRequestInfo get_account(
-	    "https://" + host, "/?" + query, headers, http_params,
+	    "https://" + host + "/?" + query, headers, http_params,
 	    [&](const HTTPResponse &response) {
 		    if (static_cast<int>(response.status) >= 400) {
 			    throw Exception(ExceptionType::INVALID_INPUT, full_url);
@@ -214,7 +214,7 @@ string GetAccountIdForS3Object(HTTPParams &http_params, S3AuthParams &auth_param
 	    CreateS3Header(access_grants_url, query, host, "s3", "GET", auth_params, "", "", "", "", "", caller_account_id);
 	std::stringstream response;
 	GetRequestInfo get_access_grant_urn(
-	    "https://" + host, access_grants_url + "?" + query, headers, http_params,
+	    "https://" + host + access_grants_url + "?" + query, headers, http_params,
 	    [&](const HTTPResponse &response) {
 		    if (static_cast<int>(response.status) >= 400) {
 			    throw Exception(ExceptionType::INVALID_INPUT, full_url);
@@ -294,7 +294,7 @@ bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const str
 	    CreateS3Header(access_grants_url, query, host, "s3", "GET", auth_params, "", "", "", "", "", account_id);
 	std::stringstream response;
 	GetRequestInfo get_data_access_creds(
-	    "https://" + host, access_grants_url + "?" + query, headers, http_params,
+	    "https://" + host + access_grants_url + "?" + query, headers, http_params,
 	    [&](const HTTPResponse &response) { return true; },
 	    [&](const_data_ptr_t data, idx_t data_length) {
 		    response << string(const_char_ptr_cast(data), data_length);
