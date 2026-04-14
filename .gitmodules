@@ -1,7 +1,6 @@
 [submodule "duckdb"]
 	path = duckdb
-	url = https://github.com/romangershgorin/duckdb.git
-	branch = s3-access-grants-151
+	url = https://github.com/duckdb/duckdb.git
 [submodule "extension-ci-tools"]
 	path = extension-ci-tools
 	url = https://github.com/duckdb/extension-ci-tools.git
