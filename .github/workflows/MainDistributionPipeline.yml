@@ -85,6 +85,7 @@ jobs:
       - name: Build
         env:
           VCPKG_TARGET_TRIPLET: ${{ matrix.vcpkg_triplet }}
+          USE_MERGED_VCPKG_MANIFEST: 1
         run: |
           BUILD_SHELL=1 make release
 
