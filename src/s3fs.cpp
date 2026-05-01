@@ -242,8 +242,8 @@ string GetAccountIdForS3Object(HTTPParams &http_params, S3AuthParams &auth_param
 }
 
 bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const string &operation, const string &url,
-                     string &access_key_id, string &secret_access_key, string &session_token,
-                     S3AccessGrantsState &state) {
+                   string &access_key_id, string &secret_access_key, string &session_token,
+                   S3AccessGrantsState &state) {
 	timestamp_t access_denied_timestamp;
 	string url_fixed_prefix = url;
 	if (StringUtil::StartsWith(url_fixed_prefix, "s3a://")) {
@@ -351,8 +351,7 @@ bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const str
 }
 
 void UpdateCredentialsFromAccessGrants(HTTPParams &http_params, S3AuthParams &auth_params, const string &method,
-                                           const string &url,
-                                           const shared_ptr<S3AccessGrantsState> &state) {
+                                       const string &url, const shared_ptr<S3AccessGrantsState> &state) {
 	if (!auth_params.s3_access_grants_enabled || !state) {
 		return;
 	}
@@ -538,8 +537,7 @@ unique_ptr<KeyValueSecret> CreateSecret(vector<string> &prefix_paths_p, string &
 }
 
 S3HTTPInput::S3HTTPInput(unique_ptr<HTTPParams> params_p, const S3AuthParams &auth_params_p,
-                         const S3ConfigParams &config_params_p,
-                         shared_ptr<S3AccessGrantsState> access_grants_state_p)
+                         const S3ConfigParams &config_params_p, shared_ptr<S3AccessGrantsState> access_grants_state_p)
     : HTTPInput(std::move(params_p)), auth_params(auth_params_p), config_params(config_params_p),
       access_grants_state(std::move(access_grants_state_p)) {
 }
@@ -549,11 +547,10 @@ S3HTTPInput::~S3HTTPInput() {
 
 S3FileHandle::S3FileHandle(FileSystem &fs, const OpenFileInfo &file, FileOpenFlags flags,
                            unique_ptr<HTTPParams> http_params_p, const S3AuthParams &auth_params_p,
-                           const S3ConfigParams &config_params_p,
-                           shared_ptr<S3AccessGrantsState> access_grants_state_p)
+                           const S3ConfigParams &config_params_p, shared_ptr<S3AccessGrantsState> access_grants_state_p)
     : HTTPFileHandle(fs, file, flags,
                      make_shared_ptr<S3HTTPInput>(std::move(http_params_p), auth_params_p, config_params_p,
-                                                 std::move(access_grants_state_p))),
+                                                  std::move(access_grants_state_p))),
       auth_params(http_input->Cast<S3HTTPInput>().auth_params),
       config_params(http_input->Cast<S3HTTPInput>().config_params) {
 	auto_fallback_to_full_file_download = false;
@@ -858,9 +855,11 @@ unique_ptr<HTTPResponse> S3FileSystem::HeadRequest(FileHandle &handle, string s3
 		headers["Host"] = parsed_s3_url.host;
 	} else {
 		// Use existing S3 authentication
-		UpdateCredentialsFromAccessGrants(handle.Cast<S3FileHandle>().http_params, auth_params, "HEAD", s3_url,
-		                                  handle.Cast<S3FileHandle>().http_input->Cast<S3HTTPInput>().access_grants_state);
-		headers = CreateS3Header(parsed_s3_url.path, "", parsed_s3_url.host, "s3", "HEAD", auth_params, "", "", "", "", "", "");
+		UpdateCredentialsFromAccessGrants(
+		    handle.Cast<S3FileHandle>().http_params, auth_params, "HEAD", s3_url,
+		    handle.Cast<S3FileHandle>().http_input->Cast<S3HTTPInput>().access_grants_state);
+		headers = CreateS3Header(parsed_s3_url.path, "", parsed_s3_url.host, "s3", "HEAD", auth_params, "", "", "", "",
+		                         "", "");
 	}
 
 	return HTTPFileSystem::HeadRequest(handle, http_url, headers);
@@ -885,8 +884,9 @@ unique_ptr<HTTPResponse> S3FileSystem::GetRequest(FileHandle &handle, string s3_
 		headers["Host"] = parsed_s3_url.host;
 	} else {
 		// Use existing S3 authentication
-		UpdateCredentialsFromAccessGrants(handle.Cast<S3FileHandle>().http_params, auth_params, "GET", s3_url,
-		                                  handle.Cast<S3FileHandle>().http_input->Cast<S3HTTPInput>().access_grants_state);
+		UpdateCredentialsFromAccessGrants(
+		    handle.Cast<S3FileHandle>().http_params, auth_params, "GET", s3_url,
+		    handle.Cast<S3FileHandle>().http_input->Cast<S3HTTPInput>().access_grants_state);
 		headers = CreateS3Header(parsed_s3_url.path, query_string, parsed_s3_url.host, "s3", "GET", auth_params, "", "",
 		                         "", "", "", "");
 	}
@@ -914,8 +914,9 @@ unique_ptr<HTTPResponse> S3FileSystem::GetRangeRequest(FileHandle &handle, strin
 		headers["Host"] = parsed_s3_url.host;
 	} else {
 		// Use existing S3 authentication
-		UpdateCredentialsFromAccessGrants(handle.Cast<S3FileHandle>().http_params, auth_params, "GET", s3_url,
-		                                  handle.Cast<S3FileHandle>().http_input->Cast<S3HTTPInput>().access_grants_state);
+		UpdateCredentialsFromAccessGrants(
+		    handle.Cast<S3FileHandle>().http_params, auth_params, "GET", s3_url,
+		    handle.Cast<S3FileHandle>().http_input->Cast<S3HTTPInput>().access_grants_state);
 		headers = CreateS3Header(parsed_s3_url.path, query_string, parsed_s3_url.host, "s3", "GET", auth_params, "", "",
 		                         "", "", "", "");
 	}
@@ -935,10 +936,11 @@ unique_ptr<HTTPResponse> S3FileSystem::DeleteRequest(FileHandle &handle, string 
 		headers["Host"] = parsed_s3_url.host;
 	} else {
 		// Use existing S3 authentication
-		UpdateCredentialsFromAccessGrants(handle.Cast<S3FileHandle>().http_params, auth_params, "DELETE", s3_url,
-		                                  handle.Cast<S3FileHandle>().http_input->Cast<S3HTTPInput>().access_grants_state);
-		headers =
-		    CreateS3Header(parsed_s3_url.path, "", parsed_s3_url.host, "s3", "DELETE", auth_params, "", "", "", "", "", "");
+		UpdateCredentialsFromAccessGrants(
+		    handle.Cast<S3FileHandle>().http_params, auth_params, "DELETE", s3_url,
+		    handle.Cast<S3FileHandle>().http_input->Cast<S3HTTPInput>().access_grants_state);
+		headers = CreateS3Header(parsed_s3_url.path, "", parsed_s3_url.host, "s3", "DELETE", auth_params, "", "", "",
+		                         "", "", "");
 	}
 
 	return HTTPFileSystem::DeleteRequest(handle, http_url, headers);
@@ -957,8 +959,7 @@ unique_ptr<HTTPFileHandle> S3FileSystem::CreateHandle(const OpenFileInfo &file, 
 	auto params = http_util.InitializeParameters(opener, info);
 
 	return duckdb::make_uniq<S3FileHandle>(*this, file, flags, std::move(params), auth_params,
-	                                       S3ConfigParams::ReadFrom(opener),
-	                                       S3AccessGrantsState::TryGetState(opener));
+	                                       S3ConfigParams::ReadFrom(opener), S3AccessGrantsState::TryGetState(opener));
 }
 
 void S3FileHandle::InitializeFromCacheEntry(const HTTPMetadataCacheEntry &cache_entry) {
@@ -1152,7 +1153,7 @@ void S3FileSystem::RemoveFiles(const vector<string> &paths, optional_ptr<FileOpe
 			auto &http_util = HTTPFSUtil::GetHTTPUtil(opener);
 			auto http_params = http_util.InitializeParameters(opener, info);
 			S3HTTPInput http_input(std::move(http_params), url_info.auth_params, S3ConfigParams::ReadFrom(opener),
-			                      S3AccessGrantsState::TryGetState(opener));
+			                       S3AccessGrantsState::TryGetState(opener));
 
 			string result;
 			auto res = HTTPFileSystem::PostRequest(http_input, http_url, headers, result,
@@ -1653,8 +1654,8 @@ string AWSListObjectV2::Request(const string &path, HTTPParams &http_params, S3A
 			// Remove last '&'
 			encoded_params.pop_back();
 		}
-		auto header_map =
-		    CreateS3Header(req_path, encoded_params, parsed_url.host, "s3", "GET", s3_auth_params, "", "", "", "", "", "");
+		auto header_map = CreateS3Header(req_path, encoded_params, parsed_url.host, "s3", "GET", s3_auth_params, "", "",
+		                                 "", "", "", "");
 
 		// Get requests use fresh connection
 		string full_host = parsed_url.http_proto + parsed_url.host;

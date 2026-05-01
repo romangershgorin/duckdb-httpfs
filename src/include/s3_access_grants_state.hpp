@@ -18,10 +18,8 @@ struct TemporaryAWSCredential {
 class S3AccessGrantsState : public ClientContextState {
 public:
 	S3AccessGrantsState()
-	    : account_id_cache(1024)
-		, bucket_owner_account_id_cache(2048)
-		, access_grants_cache(4096)
-		, access_denied_cache(4096) {
+	    : account_id_cache(1024), bucket_owner_account_id_cache(2048), access_grants_cache(4096),
+	      access_denied_cache(4096) {
 	}
 
 	LRUCache<string, string> account_id_cache;
