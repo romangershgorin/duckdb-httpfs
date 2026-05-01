@@ -32,6 +32,52 @@ jobs:
       deploy_latest: ${{ startsWith(github.ref, 'refs/heads/v') }}
       deploy_versioned: ${{ startsWith(github.ref, 'refs/heads/v') || github.ref == 'refs/heads/main' }}
 
+  duckdb-binary-build:
+    name: Build DuckDB binary with httpfs
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        arch: [osx_arm64, linux_amd64]
+        include:
+          - arch: osx_arm64
+            runner: macos-14
+          - arch: linux_amd64
+            runner: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: 'recursive'
+
+      - uses: actions/checkout@v4
+        name: Checkout Extension CI tools
+        with:
+          path: 'extension-ci-tools'
+          ref: v1.5-variegata
+          repository: duckdb/extension-ci-tools
+
+      - name: Checkout DuckDB to version
+        run: |
+          DUCKDB_GIT_VERSION=07a8585ad613bfa0f3026a58d879bc0bd945d812 make set_duckdb_version
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Install Ninja (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y ninja-build
+
+      - name: Build
+        run: |
+          GEN=ninja BUILD_SHELL=1 make release
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: duckdb-binary-${{ matrix.arch }}
+          path: build/release/duckdb
+          if-no-files-found: error
+
   code-quality:
     name: Code Quality
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@v1.5-variegata
