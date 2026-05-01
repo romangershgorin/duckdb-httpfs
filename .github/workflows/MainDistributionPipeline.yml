@@ -35,14 +35,21 @@ jobs:
   duckdb-binary-build:
     name: Build DuckDB binary with httpfs
     runs-on: ${{ matrix.runner }}
+    env:
+      VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+      VCPKG_OVERLAY_PORTS: ${{ github.workspace }}/extension-ci-tools/vcpkg_ports
+      VCPKG_OVERLAY_TRIPLETS: ${{ github.workspace }}/extension-ci-tools/toolchains
+      GEN: ninja
     strategy:
       matrix:
         arch: [osx_arm64, linux_amd64]
         include:
           - arch: osx_arm64
             runner: macos-14
+            vcpkg_triplet: arm64-osx
           - arch: linux_amd64
             runner: ubuntu-latest
+            vcpkg_triplet: x64-linux
     steps:
       - uses: actions/checkout@v4
         with:
@@ -68,9 +75,18 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y ninja-build libssl-dev libcurl4-openssl-dev
 
-      - name: Build
+      - name: Setup vcpkg
         run: |
-          GEN=ninja BUILD_SHELL=1 make release
+          git clone https://github.com/microsoft/vcpkg.git
+          cd vcpkg
+          git checkout 84bab45d415d22042bd0b9081aea57f362da3f35
+          ./bootstrap-vcpkg.sh
+
+      - name: Build
+        env:
+          VCPKG_TARGET_TRIPLET: ${{ matrix.vcpkg_triplet }}
+        run: |
+          BUILD_SHELL=1 make release
 
       - uses: actions/upload-artifact@v4
         with:
