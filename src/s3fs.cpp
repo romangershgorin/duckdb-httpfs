@@ -21,23 +21,24 @@
 
 #include "create_secret_functions.hpp"
 #include "lru_cache.hpp"
+#include "s3_access_grants_state.hpp"
 
 #include <iostream>
 #include <iostream>
 
 namespace duckdb {
 
-struct TemporaryAWSCredential {
-	string access_key_id;
-	string secret_access_key;
-	string session_token;
-	timestamp_t expiration {};
-};
+shared_ptr<S3AccessGrantsState> S3AccessGrantsState::TryGetState(ClientContext &context) {
+	return context.registered_state->GetOrCreate<S3AccessGrantsState>("s3_access_grants_state");
+}
 
-static LRUCache<string, string> AccountIdCache(1024);
-static LRUCache<string, string> BucketOwnerAccountIdCache(2048);
-static LRUCache<string, TemporaryAWSCredential> AccessGrantsCache(4096);
-static LRUCache<string, timestamp_t> AccessDeniedCache(4096);
+shared_ptr<S3AccessGrantsState> S3AccessGrantsState::TryGetState(optional_ptr<FileOpener> opener) {
+	auto client_context = FileOpener::TryGetClientContext(opener);
+	if (client_context) {
+		return TryGetState(*client_context);
+	}
+	return nullptr;
+}
 
 HTTPHeaders CreateS3Header(string url, string query, string host, string service, string method,
                            const S3AuthParams &auth_params, string date_now, string datetime_now, string payload_hash,
@@ -164,9 +165,9 @@ HTTPHeaders CreateS3Header(string url, string query, string host, string service
 // Forward declaration for FindTagContents (defined later in file)
 optional_idx FindTagContents(const string &response, const string &tag, idx_t cur_pos, string &result);
 
-string GetCurrentAccountId(HTTPParams &http_params, S3AuthParams &auth_params) {
+string GetCurrentAccountId(HTTPParams &http_params, S3AuthParams &auth_params, S3AccessGrantsState &state) {
 	string cached_account_id;
-	if (AccountIdCache.Get(auth_params.access_key_id, cached_account_id)) {
+	if (state.account_id_cache.Get(auth_params.access_key_id, cached_account_id)) {
 		return cached_account_id;
 	}
 	string query = "Action=GetCallerIdentity&Version=2011-06-15";
@@ -195,17 +196,18 @@ string GetCurrentAccountId(HTTPParams &http_params, S3AuthParams &auth_params) {
 	if (!idx.IsValid()) {
 		throw InternalException("Failed to parse STS result: could not find Account tag");
 	}
-	AccountIdCache.Put(auth_params.access_key_id, account_id);
+	state.account_id_cache.Put(auth_params.access_key_id, account_id);
 	return account_id;
 }
 
-string GetAccountIdForS3Object(HTTPParams &http_params, S3AuthParams &auth_params, const string &url) {
+string GetAccountIdForS3Object(HTTPParams &http_params, S3AuthParams &auth_params, const string &url,
+                               S3AccessGrantsState &state) {
 	auto parsed_url = S3FileSystem::S3UrlParse(url, auth_params);
 	string cached_account_id;
-	if (BucketOwnerAccountIdCache.Get(parsed_url.bucket, cached_account_id)) {
+	if (state.bucket_owner_account_id_cache.Get(parsed_url.bucket, cached_account_id)) {
 		return cached_account_id;
 	}
-	string caller_account_id = GetCurrentAccountId(http_params, auth_params);
+	string caller_account_id = GetCurrentAccountId(http_params, auth_params, state);
 	string query = "s3prefix=" + StringUtil::URLEncode(url);
 	string access_grants_url = "/v20180820/accessgrantsinstance/prefix";
 	string host = caller_account_id + ".s3-control." + auth_params.region + ".amazonaws.com";
@@ -235,31 +237,32 @@ string GetAccountIdForS3Object(HTTPParams &http_params, S3AuthParams &auth_param
 		throw InternalException("Failed to parse S3 access grants result: could not find AccessGrantsInstanceArn tag");
 	}
 	vector<string> parts = StringUtil::Split(access_grants_arn, ':');
-	BucketOwnerAccountIdCache.Put(parsed_url.bucket, parts[4]);
+	state.bucket_owner_account_id_cache.Put(parsed_url.bucket, parts[4]);
 	return parts[4];
 }
 
 bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const string &operation, const string &url,
-                     string &access_key_id, string &secret_access_key, string &session_token) {
+                     string &access_key_id, string &secret_access_key, string &session_token,
+                     S3AccessGrantsState &state) {
 	timestamp_t access_denied_timestamp;
 	string url_fixed_prefix = url;
 	if (StringUtil::StartsWith(url_fixed_prefix, "s3a://")) {
 		url_fixed_prefix = StringUtil::Replace(url_fixed_prefix, "s3a://", "s3://");
 	}
 
-	if (AccessDeniedCache.Get(url_fixed_prefix, access_denied_timestamp)) {
+	if (state.access_denied_cache.Get(url_fixed_prefix, access_denied_timestamp)) {
 		// do not try if we find a recent(5 min) access denied
 		if (access_denied_timestamp > Timestamp::GetCurrentTimestamp()) {
 			return false;
 		}
-		AccessDeniedCache.Delete(url_fixed_prefix);
+		state.access_denied_cache.Delete(url_fixed_prefix);
 	}
-	auto account_id = GetAccountIdForS3Object(http_params, auth_params, url_fixed_prefix);
+	auto account_id = GetAccountIdForS3Object(http_params, auth_params, url_fixed_prefix, state);
 	int current_pos = url_fixed_prefix.size() - 1;
 	TemporaryAWSCredential creds;
 	while (current_pos > 3) {
 		auto prefix = url_fixed_prefix.substr(0, current_pos) + "/*";
-		auto found = AccessGrantsCache.Get(prefix, creds);
+		auto found = state.access_grants_cache.Get(prefix, creds);
 		if (found) {
 			if (creds.expiration > Timestamp::GetCurrentTimestamp()) {
 				access_key_id = creds.access_key_id;
@@ -267,14 +270,14 @@ bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const str
 				session_token = creds.session_token;
 				return true;
 			}
-			AccessGrantsCache.Delete(prefix);
+			state.access_grants_cache.Delete(prefix);
 		}
 		current_pos = url_fixed_prefix.rfind("/", current_pos - 1);
 	}
 	current_pos = url_fixed_prefix.size() - 1;
 	while (current_pos > 3) {
 		auto prefix = url_fixed_prefix.substr(0, current_pos) + "*";
-		auto found = AccessGrantsCache.Get(prefix, creds);
+		auto found = state.access_grants_cache.Get(prefix, creds);
 		if (found) {
 			if (creds.expiration > Timestamp::GetCurrentTimestamp()) {
 				access_key_id = creds.access_key_id;
@@ -282,7 +285,7 @@ bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const str
 				session_token = creds.session_token;
 				return true;
 			}
-			AccessGrantsCache.Delete(prefix);
+			state.access_grants_cache.Delete(prefix);
 		}
 		current_pos--;
 	}
@@ -305,7 +308,7 @@ bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const str
 	if (result->HasRequestError() || (int)result->status >= 400) {
 		// cache access denied for 5 min
 		if ((int)result->status == 403) {
-			AccessDeniedCache.Put(url_fixed_prefix, Timestamp::GetCurrentTimestamp() + 5 * 60 * 1000000);
+			state.access_denied_cache.Put(url_fixed_prefix, Timestamp::GetCurrentTimestamp() + 5 * 60 * 1000000);
 		}
 		return false;
 	}
@@ -343,13 +346,14 @@ bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const str
 	temp_creds.secret_access_key = secret_access_key;
 	temp_creds.session_token = session_token;
 	temp_creds.expiration = expiration_ts;
-	AccessGrantsCache.Put(matched_grant_target, temp_creds);
+	state.access_grants_cache.Put(matched_grant_target, temp_creds);
 	return true;
 }
 
 void UpdateCredentialsFromAccessGrants(HTTPParams &http_params, S3AuthParams &auth_params, const string &method,
-                                           const string &url) {
-	if (!auth_params.s3_access_grants_enabled) {
+                                           const string &url,
+                                           const shared_ptr<S3AccessGrantsState> &state) {
+	if (!auth_params.s3_access_grants_enabled || !state) {
 		return;
 	}
 
@@ -362,7 +366,8 @@ void UpdateCredentialsFromAccessGrants(HTTPParams &http_params, S3AuthParams &au
 		operation = "READ";
 	}
 	string access_key_id, secret_access_key, session_token;
-	if (GetDataAccess(http_params, auth_params, operation, url, access_key_id, secret_access_key, session_token)) {
+	if (GetDataAccess(http_params, auth_params, operation, url, access_key_id, secret_access_key, session_token,
+	                  *state)) {
 		auth_params.access_key_id = access_key_id;
 		auth_params.secret_access_key = secret_access_key;
 		auth_params.session_token = session_token;
@@ -533,8 +538,10 @@ unique_ptr<KeyValueSecret> CreateSecret(vector<string> &prefix_paths_p, string &
 }
 
 S3HTTPInput::S3HTTPInput(unique_ptr<HTTPParams> params_p, const S3AuthParams &auth_params_p,
-                         const S3ConfigParams &config_params_p)
-    : HTTPInput(std::move(params_p)), auth_params(auth_params_p), config_params(config_params_p) {
+                         const S3ConfigParams &config_params_p,
+                         shared_ptr<S3AccessGrantsState> access_grants_state_p)
+    : HTTPInput(std::move(params_p)), auth_params(auth_params_p), config_params(config_params_p),
+      access_grants_state(std::move(access_grants_state_p)) {
 }
 
 S3HTTPInput::~S3HTTPInput() {
@@ -542,9 +549,11 @@ S3HTTPInput::~S3HTTPInput() {
 
 S3FileHandle::S3FileHandle(FileSystem &fs, const OpenFileInfo &file, FileOpenFlags flags,
                            unique_ptr<HTTPParams> http_params_p, const S3AuthParams &auth_params_p,
-                           const S3ConfigParams &config_params_p)
+                           const S3ConfigParams &config_params_p,
+                           shared_ptr<S3AccessGrantsState> access_grants_state_p)
     : HTTPFileHandle(fs, file, flags,
-                     make_shared_ptr<S3HTTPInput>(std::move(http_params_p), auth_params_p, config_params_p)),
+                     make_shared_ptr<S3HTTPInput>(std::move(http_params_p), auth_params_p, config_params_p,
+                                                 std::move(access_grants_state_p))),
       auth_params(http_input->Cast<S3HTTPInput>().auth_params),
       config_params(http_input->Cast<S3HTTPInput>().config_params) {
 	auto_fallback_to_full_file_download = false;
@@ -803,7 +812,7 @@ unique_ptr<HTTPResponse> S3FileSystem::PostRequest(HTTPInput &input, string url,
 		headers["Content-Type"] = "application/octet-stream";
 	} else {
 		// Use existing S3 authentication
-		UpdateCredentialsFromAccessGrants(input.http_params, auth_params, "POST", url);
+		UpdateCredentialsFromAccessGrants(input.http_params, auth_params, "POST", url, s3_input.access_grants_state);
 		auto payload_hash = GetPayloadHash(buffer_in, buffer_in_len);
 		headers = CreateS3Header(parsed_s3_url.path, http_params, parsed_s3_url.host, "s3", "POST", auth_params, "", "",
 		                         payload_hash, "application/octet-stream", "", "");
@@ -828,7 +837,7 @@ unique_ptr<HTTPResponse> S3FileSystem::PutRequest(HTTPInput &input, string url, 
 		headers["Content-Type"] = content_type;
 	} else {
 		// Use existing S3 authentication
-		UpdateCredentialsFromAccessGrants(input.http_params, auth_params, "PUT", url);
+		UpdateCredentialsFromAccessGrants(input.http_params, auth_params, "PUT", url, s3_input.access_grants_state);
 		auto payload_hash = GetPayloadHash(buffer_in, buffer_in_len);
 		headers = CreateS3Header(parsed_s3_url.path, http_params, parsed_s3_url.host, "s3", "PUT", auth_params, "", "",
 		                         payload_hash, content_type, "", "");
@@ -849,7 +858,8 @@ unique_ptr<HTTPResponse> S3FileSystem::HeadRequest(FileHandle &handle, string s3
 		headers["Host"] = parsed_s3_url.host;
 	} else {
 		// Use existing S3 authentication
-		UpdateCredentialsFromAccessGrants(handle.Cast<S3FileHandle>().http_params, auth_params, "HEAD", s3_url);
+		UpdateCredentialsFromAccessGrants(handle.Cast<S3FileHandle>().http_params, auth_params, "HEAD", s3_url,
+		                                  handle.Cast<S3FileHandle>().http_input->Cast<S3HTTPInput>().access_grants_state);
 		headers = CreateS3Header(parsed_s3_url.path, "", parsed_s3_url.host, "s3", "HEAD", auth_params, "", "", "", "", "", "");
 	}
 
@@ -875,7 +885,8 @@ unique_ptr<HTTPResponse> S3FileSystem::GetRequest(FileHandle &handle, string s3_
 		headers["Host"] = parsed_s3_url.host;
 	} else {
 		// Use existing S3 authentication
-		UpdateCredentialsFromAccessGrants(handle.Cast<S3FileHandle>().http_params, auth_params, "GET", s3_url);
+		UpdateCredentialsFromAccessGrants(handle.Cast<S3FileHandle>().http_params, auth_params, "GET", s3_url,
+		                                  handle.Cast<S3FileHandle>().http_input->Cast<S3HTTPInput>().access_grants_state);
 		headers = CreateS3Header(parsed_s3_url.path, query_string, parsed_s3_url.host, "s3", "GET", auth_params, "", "",
 		                         "", "", "", "");
 	}
@@ -903,7 +914,8 @@ unique_ptr<HTTPResponse> S3FileSystem::GetRangeRequest(FileHandle &handle, strin
 		headers["Host"] = parsed_s3_url.host;
 	} else {
 		// Use existing S3 authentication
-		UpdateCredentialsFromAccessGrants(handle.Cast<S3FileHandle>().http_params, auth_params, "GET", s3_url);
+		UpdateCredentialsFromAccessGrants(handle.Cast<S3FileHandle>().http_params, auth_params, "GET", s3_url,
+		                                  handle.Cast<S3FileHandle>().http_input->Cast<S3HTTPInput>().access_grants_state);
 		headers = CreateS3Header(parsed_s3_url.path, query_string, parsed_s3_url.host, "s3", "GET", auth_params, "", "",
 		                         "", "", "", "");
 	}
@@ -923,7 +935,8 @@ unique_ptr<HTTPResponse> S3FileSystem::DeleteRequest(FileHandle &handle, string 
 		headers["Host"] = parsed_s3_url.host;
 	} else {
 		// Use existing S3 authentication
-		UpdateCredentialsFromAccessGrants(handle.Cast<S3FileHandle>().http_params, auth_params, "DELETE", s3_url);
+		UpdateCredentialsFromAccessGrants(handle.Cast<S3FileHandle>().http_params, auth_params, "DELETE", s3_url,
+		                                  handle.Cast<S3FileHandle>().http_input->Cast<S3HTTPInput>().access_grants_state);
 		headers =
 		    CreateS3Header(parsed_s3_url.path, "", parsed_s3_url.host, "s3", "DELETE", auth_params, "", "", "", "", "", "");
 	}
@@ -944,7 +957,8 @@ unique_ptr<HTTPFileHandle> S3FileSystem::CreateHandle(const OpenFileInfo &file, 
 	auto params = http_util.InitializeParameters(opener, info);
 
 	return duckdb::make_uniq<S3FileHandle>(*this, file, flags, std::move(params), auth_params,
-	                                       S3ConfigParams::ReadFrom(opener));
+	                                       S3ConfigParams::ReadFrom(opener),
+	                                       S3AccessGrantsState::TryGetState(opener));
 }
 
 void S3FileHandle::InitializeFromCacheEntry(const HTTPMetadataCacheEntry &cache_entry) {
@@ -1137,7 +1151,8 @@ void S3FileSystem::RemoveFiles(const vector<string> &paths, optional_ptr<FileOpe
 			FileOpenerInfo info = {bucket_url};
 			auto &http_util = HTTPFSUtil::GetHTTPUtil(opener);
 			auto http_params = http_util.InitializeParameters(opener, info);
-			S3HTTPInput http_input(std::move(http_params), url_info.auth_params, S3ConfigParams::ReadFrom(opener));
+			S3HTTPInput http_input(std::move(http_params), url_info.auth_params, S3ConfigParams::ReadFrom(opener),
+			                      S3AccessGrantsState::TryGetState(opener));
 
 			string result;
 			auto res = HTTPFileSystem::PostRequest(http_input, http_url, headers, result,

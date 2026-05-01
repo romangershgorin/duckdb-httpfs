@@ -116,14 +116,18 @@ struct S3ConfigParams {
 	static S3ConfigParams ReadFrom(optional_ptr<FileOpener> opener);
 };
 
+class S3AccessGrantsState;
+
 class S3HTTPInput : public HTTPInput {
 public:
 	S3HTTPInput(unique_ptr<HTTPParams> params, const S3AuthParams &auth_params_p,
-	            const S3ConfigParams &config_params_p);
+	            const S3ConfigParams &config_params_p,
+	            shared_ptr<S3AccessGrantsState> access_grants_state_p = nullptr);
 	~S3HTTPInput() override;
 
 	S3AuthParams auth_params;
 	S3ConfigParams config_params;
+	shared_ptr<S3AccessGrantsState> access_grants_state;
 };
 
 class S3FileSystem;
@@ -135,7 +139,8 @@ class S3FileHandle : public HTTPFileHandle {
 
 public:
 	S3FileHandle(FileSystem &fs, const OpenFileInfo &file, FileOpenFlags flags, unique_ptr<HTTPParams> http_params_p,
-	             const S3AuthParams &auth_params_p, const S3ConfigParams &config_params_p);
+	             const S3AuthParams &auth_params_p, const S3ConfigParams &config_params_p,
+	             shared_ptr<S3AccessGrantsState> access_grants_state_p = nullptr);
 	~S3FileHandle() override;
 
 	S3AuthParams &auth_params;
