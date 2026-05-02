@@ -20,6 +20,7 @@ jobs:
       duckdb_version: 07a8585ad613bfa0f3026a58d879bc0bd945d812
       ci_tools_version: v1.5-variegata
       use_merged_vcpkg_manifest: '1'
+      exclude_archs: 'wasm_mvp;wasm_eh;wasm_threads;windows_amd64;windows_amd64_mingw;windows_arm64'
 
   duckdb-stable-deploy:
     name: Deploy extension binaries
