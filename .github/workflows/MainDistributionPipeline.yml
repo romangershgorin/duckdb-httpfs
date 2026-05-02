@@ -95,6 +95,16 @@ jobs:
           path: build/release/duckdb
           if-no-files-found: error
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: duckdb-extensions-${{ matrix.arch }}
+          path: |
+            build/release/extension/**/aws.duckdb_extension
+            build/release/extension/**/avro.duckdb_extension
+            build/release/extension/**/httpfs.duckdb_extension
+            build/release/extension/**/iceberg.duckdb_extension
+          if-no-files-found: error
+
   code-quality:
     name: Code Quality
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@v1.5-variegata
