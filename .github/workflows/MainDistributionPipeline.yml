@@ -19,6 +19,7 @@ jobs:
       extension_name: httpfs
       duckdb_version: 07a8585ad613bfa0f3026a58d879bc0bd945d812
       ci_tools_version: v1.5-variegata
+      use_merged_vcpkg_manifest: '1'
 
   duckdb-stable-deploy:
     name: Deploy extension binaries
