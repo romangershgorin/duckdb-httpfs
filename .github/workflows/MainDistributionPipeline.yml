@@ -106,6 +106,29 @@ jobs:
             build/release/extension/**/iceberg.duckdb_extension
           if-no-files-found: error
 
+  trigger-duckdb-python-wheel:
+    name: Trigger duckdb-python wheel build
+    needs:
+      - duckdb-stable-build
+      - duckdb-binary-build
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' && secrets.DUCKDB_PYTHON_GH_TOKEN != ''
+    env:
+      DUCKDB_SHA: 07a8585ad613bfa0f3026a58d879bc0bd945d812
+      DUCKDB_PYTHON_REPO: romangershgorin/duckdb-python
+      DUCKDB_PYTHON_REF: main
+      DUCKDB_PYTHON_WORKFLOW: release.yml
+    steps:
+      - name: Dispatch duckdb-python release workflow
+        env:
+          GH_TOKEN: ${{ secrets.DUCKDB_PYTHON_GH_TOKEN }}
+        run: |
+          curl -sS --fail-with-body -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            https://api.github.com/repos/${DUCKDB_PYTHON_REPO}/actions/workflows/${DUCKDB_PYTHON_WORKFLOW}/dispatches \
+            -d '{"ref":"'"${DUCKDB_PYTHON_REF}"'","inputs":{"duckdb-sha":"'"${DUCKDB_SHA}"'","pypi-index":"test"}}'
+
   code-quality:
     name: Code Quality
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_code_quality.yml@v1.5-variegata
