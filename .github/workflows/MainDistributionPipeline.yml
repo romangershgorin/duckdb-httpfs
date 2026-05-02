@@ -112,7 +112,7 @@ jobs:
       - duckdb-stable-build
       - duckdb-binary-build
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' && secrets.DUCKDB_PYTHON_GH_TOKEN != ''
+    if: github.event_name != 'pull_request'
     env:
       DUCKDB_SHA: 07a8585ad613bfa0f3026a58d879bc0bd945d812
       DUCKDB_PYTHON_REPO: romangershgorin/duckdb-python
@@ -123,6 +123,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.DUCKDB_PYTHON_GH_TOKEN }}
         run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "DUCKDB_PYTHON_GH_TOKEN is not configured; skipping duckdb-python dispatch"
+            exit 0
+          fi
           curl -sS --fail-with-body -X POST \
             -H "Authorization: Bearer ${GH_TOKEN}" \
             -H "Accept: application/vnd.github+json" \
