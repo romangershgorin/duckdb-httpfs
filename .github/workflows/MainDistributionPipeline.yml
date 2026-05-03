@@ -109,9 +109,6 @@ jobs:
 
   trigger-duckdb-python-wheel:
     name: Trigger duckdb-python wheel build
-    needs:
-      - duckdb-stable-build
-      - duckdb-binary-build
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
     env:
