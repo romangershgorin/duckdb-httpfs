@@ -114,7 +114,7 @@ jobs:
     env:
       DUCKDB_SHA: 07a8585ad613bfa0f3026a58d879bc0bd945d812
       DUCKDB_PYTHON_REPO: romangershgorin/duckdb-python
-      DUCKDB_PYTHON_REF: s3-access-grants
+      DUCKDB_PYTHON_REF: s3-access-grants-15
       DUCKDB_PYTHON_WORKFLOW: release.yml
     steps:
       - name: Dispatch duckdb-python release workflow
