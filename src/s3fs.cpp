@@ -1141,19 +1141,24 @@ void S3FileSystem::RemoveFiles(const vector<string> &paths, optional_ptr<FileOpe
 			const string http_query_param_for_sig = "delete=";
 			const string http_query_param_for_url = "delete";
 			auto payload_hash = GetPayloadHash(const_cast<char *>(body.data()), body.length());
-
-			auto headers =
-			    CreateS3Header(url_info.path, http_query_param_for_sig, url_info.host, "s3", "POST",
-			                   url_info.auth_params, "", "", payload_hash, "application/xml", content_md5, "");
-
-			string http_url = url_info.http_proto + url_info.host + S3FileSystem::UrlEncode(url_info.path) + "?" +
-			                  http_query_param_for_url;
 			string bucket_url = url_info.prefix + bucket + "/";
+			string access_grants_target_url = url_info.prefix + bucket + "/" + keys[batch_start];
 			FileOpenerInfo info = {bucket_url};
 			auto &http_util = HTTPFSUtil::GetHTTPUtil(opener);
 			auto http_params = http_util.InitializeParameters(opener, info);
-			S3HTTPInput http_input(std::move(http_params), url_info.auth_params, S3ConfigParams::ReadFrom(opener),
-			                       S3AccessGrantsState::TryGetState(opener));
+			auto auth_params = url_info.auth_params;
+			auto access_grants_state = S3AccessGrantsState::TryGetState(opener);
+			S3HTTPInput http_input(std::move(http_params), auth_params, S3ConfigParams::ReadFrom(opener),
+			                       access_grants_state);
+			UpdateCredentialsFromAccessGrants(*http_input.http_params, auth_params, "POST", access_grants_target_url,
+			                                 http_input.access_grants_state);
+
+			auto headers =
+			    CreateS3Header(url_info.path, http_query_param_for_sig, url_info.host, "s3", "POST", auth_params, "",
+			                   "", payload_hash, "application/xml", content_md5, "");
+
+			string http_url = url_info.http_proto + url_info.host + S3FileSystem::UrlEncode(url_info.path) + "?" +
+			                  http_query_param_for_url;
 
 			string result;
 			auto res = HTTPFileSystem::PostRequest(http_input, http_url, headers, result,
