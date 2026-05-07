@@ -263,7 +263,7 @@ string GetAccountIdForS3Object(HTTPParams &http_params, S3AuthParams &auth_param
 
 bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const string &operation, const string &url,
                    string &access_key_id, string &secret_access_key, string &session_token, string &expiration,
-                   S3AccessGrantsState &state) {
+                   string &credential_source, S3AccessGrantsState &state) {
 	timestamp_t access_denied_timestamp;
 	string url_fixed_prefix = url;
 	if (StringUtil::StartsWith(url_fixed_prefix, "s3a://")) {
@@ -289,6 +289,7 @@ bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const str
 				secret_access_key = creds.secret_access_key;
 				session_token = creds.session_token;
 				expiration = StrfTimeFormat::Format(creds.expiration, "%Y-%m-%dT%H:%M:%SZ");
+				credential_source = "cache";
 				return true;
 			}
 			state.access_grants_cache.Delete(prefix);
@@ -305,6 +306,7 @@ bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const str
 				secret_access_key = creds.secret_access_key;
 				session_token = creds.session_token;
 				expiration = StrfTimeFormat::Format(creds.expiration, "%Y-%m-%dT%H:%M:%SZ");
+				credential_source = "cache";
 				return true;
 			}
 			state.access_grants_cache.Delete(prefix);
@@ -371,6 +373,7 @@ bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const str
 	temp_creds.session_token = session_token;
 	temp_creds.expiration = expiration_ts;
 	state.access_grants_cache.Put(matched_grant_target, temp_creds);
+	credential_source = "api";
 	return true;
 }
 
@@ -392,22 +395,20 @@ void UpdateCredentialsFromAccessGrants(HTTPParams &http_params, S3AuthParams &au
 	if (method == "GET" || method == "HEAD") {
 		operation = "READ";
 	}
-	string access_key_id, secret_access_key, session_token, expiration;
+	string access_key_id, secret_access_key, session_token, expiration, credential_source;
 	bool updated = GetDataAccess(http_params, auth_params, operation, url, access_key_id, secret_access_key,
-	                             session_token, expiration, *state);
+	                             session_token, expiration, credential_source, *state);
 	AppendPartitionWriteLog("[S3][AccessGrants] request method=" + method + " operation=" + operation + " url=" +
 	                        url + " updated=" + (updated ? "true" : "false"));
 	if (updated) {
 		auth_params.access_key_id = access_key_id;
 		auth_params.secret_access_key = secret_access_key;
 		auth_params.session_token = session_token;
-		if (method == "PUT" || method == "POST") {
-			AppendPartitionWriteLog("[S3][AccessGrants][Creds] method=" + method + " url=" + url +
-			                        " expiration=" + expiration +
-			                        " access_key_id=" + MaskCredentialValue(access_key_id) +
-			                        " secret_access_key=" + MaskCredentialValue(secret_access_key) +
-			                        " session_token=" + MaskCredentialValue(session_token));
-		}
+		AppendPartitionWriteLog("[S3][AccessGrants][Creds] method=" + method + " operation=" + operation +
+		                        " source=" + credential_source + " url=" + url + " expiration=" + expiration +
+		                        " access_key_id=" + MaskCredentialValue(access_key_id) +
+		                        " secret_access_key=" + MaskCredentialValue(secret_access_key) +
+		                        " session_token=" + MaskCredentialValue(session_token));
 	}
 }
 
