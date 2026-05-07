@@ -29,11 +29,23 @@
 namespace duckdb {
 
 static void AppendPartitionWriteLog(const string &message) {
+	auto timestamp = Timestamp::GetCurrentTimestamp();
+	auto timestamp_str = StrfTimeFormat::Format(timestamp, "%Y-%m-%dT%H:%M:%SZ");
 	std::ofstream log_file("/home/duckdbuser/log.txt", std::ios::app);
 	if (!log_file.good()) {
 		return;
 	}
-	log_file << message << std::endl;
+	log_file << "[" << timestamp_str << "] " << message << std::endl;
+}
+
+static string MaskCredentialValue(const string &value) {
+	if (value.empty()) {
+		return "<empty>";
+	}
+	if (value.size() <= 8) {
+		return string(value.size(), '*');
+	}
+	return value.substr(0, 4) + "..." + value.substr(value.size() - 4);
 }
 
 shared_ptr<S3AccessGrantsState> S3AccessGrantsState::TryGetState(ClientContext &context) {
@@ -250,7 +262,7 @@ string GetAccountIdForS3Object(HTTPParams &http_params, S3AuthParams &auth_param
 }
 
 bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const string &operation, const string &url,
-                   string &access_key_id, string &secret_access_key, string &session_token,
+                   string &access_key_id, string &secret_access_key, string &session_token, string &expiration,
                    S3AccessGrantsState &state) {
 	timestamp_t access_denied_timestamp;
 	string url_fixed_prefix = url;
@@ -276,6 +288,7 @@ bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const str
 				access_key_id = creds.access_key_id;
 				secret_access_key = creds.secret_access_key;
 				session_token = creds.session_token;
+				expiration = StrfTimeFormat::Format(creds.expiration, "%Y-%m-%dT%H:%M:%SZ");
 				return true;
 			}
 			state.access_grants_cache.Delete(prefix);
@@ -291,6 +304,7 @@ bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const str
 				access_key_id = creds.access_key_id;
 				secret_access_key = creds.secret_access_key;
 				session_token = creds.session_token;
+				expiration = StrfTimeFormat::Format(creds.expiration, "%Y-%m-%dT%H:%M:%SZ");
 				return true;
 			}
 			state.access_grants_cache.Delete(prefix);
@@ -321,7 +335,7 @@ bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const str
 		return false;
 	}
 	string response_str = response.str();
-	string expiration;
+	string response_expiration;
 	string matched_grant_target;
 	optional_idx idx;
 	idx = FindTagContents(response_str, "AccessKeyId", 0, access_key_id);
@@ -336,10 +350,11 @@ bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const str
 	if (!idx.IsValid()) {
 		throw InternalException("Failed to parse S3 access grants result: could not find SessionToken tag");
 	}
-	idx = FindTagContents(response_str, "Expiration", 0, expiration);
+	idx = FindTagContents(response_str, "Expiration", 0, response_expiration);
 	if (!idx.IsValid()) {
 		throw InternalException("Failed to parse S3 access grants result: could not find Expiration tag");
 	}
+	expiration = response_expiration;
 	idx = FindTagContents(response_str, "MatchedGrantTarget", 0, matched_grant_target);
 	if (!idx.IsValid()) {
 		throw InternalException("Failed to parse S3 access grants result: could not find MatchedGrantTarget tag");
@@ -347,7 +362,8 @@ bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const str
 	timestamp_t expiration_ts;
 	bool has_offset;
 	string_t tz(nullptr, 0);
-	Timestamp::TryConvertTimestampTZ(expiration.c_str(), expiration.size(), expiration_ts, true, has_offset, tz);
+	Timestamp::TryConvertTimestampTZ(response_expiration.c_str(), response_expiration.size(), expiration_ts, true,
+	                                 has_offset, tz);
 	expiration_ts -= 10 * 60 * 1000000; // 10 min buffer
 	TemporaryAWSCredential temp_creds;
 	temp_creds.access_key_id = access_key_id;
@@ -376,15 +392,22 @@ void UpdateCredentialsFromAccessGrants(HTTPParams &http_params, S3AuthParams &au
 	if (method == "GET" || method == "HEAD") {
 		operation = "READ";
 	}
-	string access_key_id, secret_access_key, session_token;
+	string access_key_id, secret_access_key, session_token, expiration;
 	bool updated = GetDataAccess(http_params, auth_params, operation, url, access_key_id, secret_access_key,
-	                             session_token, *state);
+	                             session_token, expiration, *state);
 	AppendPartitionWriteLog("[S3][AccessGrants] request method=" + method + " operation=" + operation + " url=" +
 	                        url + " updated=" + (updated ? "true" : "false"));
 	if (updated) {
 		auth_params.access_key_id = access_key_id;
 		auth_params.secret_access_key = secret_access_key;
 		auth_params.session_token = session_token;
+		if (method == "PUT" || method == "POST") {
+			AppendPartitionWriteLog("[S3][AccessGrants][Creds] method=" + method + " url=" + url +
+			                        " expiration=" + expiration +
+			                        " access_key_id=" + MaskCredentialValue(access_key_id) +
+			                        " secret_access_key=" + MaskCredentialValue(secret_access_key) +
+			                        " session_token=" + MaskCredentialValue(session_token));
+		}
 	}
 }
 
