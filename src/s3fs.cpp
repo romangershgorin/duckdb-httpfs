@@ -282,7 +282,8 @@ bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const str
 	TemporaryAWSCredential creds;
 	while (current_pos > 3) {
 		auto prefix = url_fixed_prefix.substr(0, current_pos) + "/*";
-		auto found = state.access_grants_cache.Get(prefix, creds);
+		auto cache_key = operation + "|" + prefix;
+		auto found = state.access_grants_cache.Get(cache_key, creds);
 		if (found) {
 			if (creds.expiration > Timestamp::GetCurrentTimestamp()) {
 				access_key_id = creds.access_key_id;
@@ -292,14 +293,15 @@ bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const str
 				credential_source = "cache";
 				return true;
 			}
-			state.access_grants_cache.Delete(prefix);
+			state.access_grants_cache.Delete(cache_key);
 		}
 		current_pos = url_fixed_prefix.rfind("/", current_pos - 1);
 	}
 	current_pos = url_fixed_prefix.size() - 1;
 	while (current_pos > 3) {
 		auto prefix = url_fixed_prefix.substr(0, current_pos) + "*";
-		auto found = state.access_grants_cache.Get(prefix, creds);
+		auto cache_key = operation + "|" + prefix;
+		auto found = state.access_grants_cache.Get(cache_key, creds);
 		if (found) {
 			if (creds.expiration > Timestamp::GetCurrentTimestamp()) {
 				access_key_id = creds.access_key_id;
@@ -309,7 +311,7 @@ bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const str
 				credential_source = "cache";
 				return true;
 			}
-			state.access_grants_cache.Delete(prefix);
+			state.access_grants_cache.Delete(cache_key);
 		}
 		current_pos--;
 	}
@@ -372,7 +374,7 @@ bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const str
 	temp_creds.secret_access_key = secret_access_key;
 	temp_creds.session_token = session_token;
 	temp_creds.expiration = expiration_ts;
-	state.access_grants_cache.Put(matched_grant_target, temp_creds);
+	state.access_grants_cache.Put(operation + "|" + matched_grant_target, temp_creds);
 	credential_source = "api";
 	return true;
 }
