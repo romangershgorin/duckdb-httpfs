@@ -1,10 +1,19 @@
 #include "s3_multi_part_upload.hpp"
 
+#include <fstream>
 #include <thread>
 #ifdef EMSCRIPTEN
 #define SAME_THREAD_UPLOAD
 #endif
 namespace duckdb {
+
+static void AppendPartitionWriteLog(const string &message) {
+	std::ofstream log_file("/home/duckdbuser/log.txt", std::ios::app);
+	if (!log_file.good()) {
+		return;
+	}
+	log_file << message << std::endl;
+}
 
 S3MultiPartUpload::S3MultiPartUpload(S3FileHandle &s3_file_handle)
     : s3fs(s3_file_handle.file_system.Cast<S3FileSystem>()), http_input(s3_file_handle.http_input),
@@ -15,8 +24,11 @@ S3MultiPartUpload::S3MultiPartUpload(S3FileHandle &s3_file_handle)
 void S3MultiPartUpload::Finalize() {
 	if (upload_finalized) {
 		// already finalized
+		AppendPartitionWriteLog("[S3][Multipart] finalize_skipped_already_finalized path=" + path);
 		return;
 	}
+	AppendPartitionWriteLog("[S3][Multipart] finalize_start path=" + path +
+	                        " parts_uploaded=" + to_string(parts_uploaded.load()));
 	FlushAllBuffers();
 	if (parts_uploaded) {
 		FinalizeMultipartUpload();
@@ -55,6 +67,7 @@ shared_ptr<S3WriteBuffer> S3MultiPartUpload::GetBuffer(uint16_t write_buffer_idx
 
 // Opens the multipart upload and returns the ID
 string S3MultiPartUpload::InitializeMultipartUpload() {
+	AppendPartitionWriteLog("[S3][Multipart] init_start path=" + path);
 	// AWS response is around 300~ chars in docs so this should be enough to not need a resize
 	string result;
 	string query_param = "uploads=";
@@ -75,12 +88,14 @@ string S3MultiPartUpload::InitializeMultipartUpload() {
 	open_tag_pos += 10; // Skip open tag
 
 	initialized_multipart_upload = true;
+	AppendPartitionWriteLog("[S3][Multipart] init_success path=" + path);
 
 	return result.substr(open_tag_pos, close_tag_pos - open_tag_pos);
 }
 
 void S3MultiPartUpload::FinalizeMultipartUpload() {
 	if (upload_finalized) {
+		AppendPartitionWriteLog("[S3][Multipart] complete_skipped_already_finalized path=" + path);
 		return;
 	}
 
@@ -104,7 +119,11 @@ void S3MultiPartUpload::FinalizeMultipartUpload() {
 	string result;
 
 	string query_param = "uploadId=" + S3FileSystem::UrlEncode(multipart_upload_id, true);
+	AppendPartitionWriteLog("[S3][Multipart] complete_start path=" + path + " upload_id=" + multipart_upload_id +
+	                        " parts=" + to_string(parts_uploaded.load()));
 	auto res = s3fs.PostRequest(*http_input, path, {}, result, (char *)body.c_str(), body.length(), query_param);
+	AppendPartitionWriteLog("[S3][Multipart] complete_status path=" + path +
+	                        " status=" + to_string(static_cast<int>(res->status)));
 	auto open_tag_pos = result.find("<CompleteMultipartUploadResult", 0);
 	if (open_tag_pos == string::npos) {
 		throw HTTPException(*res, "Unexpected response during S3 multipart upload finalization: %d\n\n%s",
@@ -129,6 +148,9 @@ void S3MultiPartUpload::UploadBufferImplementation(shared_ptr<S3WriteBuffer> wri
                                                    bool single_upload) {
 	unique_ptr<HTTPResponse> res;
 	string etag;
+	AppendPartitionWriteLog("[S3][Multipart] upload_part_start path=" + path + " part_no=" +
+	                        to_string(write_buffer->part_no) + " bytes=" + to_string(write_buffer->idx) +
+	                        " single=" + (single_upload ? "true" : "false"));
 
 	try {
 		res = s3fs.PutRequest(*http_input, path, {}, (char *)write_buffer->Ptr(), write_buffer->idx, query_param);
@@ -142,7 +164,13 @@ void S3MultiPartUpload::UploadBufferImplementation(shared_ptr<S3WriteBuffer> wri
 			throw IOException("Unexpected response when uploading part to S3");
 		}
 		etag = res->headers.GetHeaderValue("ETag");
+		AppendPartitionWriteLog("[S3][Multipart] upload_part_status path=" + path + " part_no=" +
+		                        to_string(write_buffer->part_no) +
+		                        " status=" + to_string(static_cast<int>(res->status)));
 	} catch (std::exception &ex) {
+		AppendPartitionWriteLog("[S3][Multipart] upload_part_error path=" + path + " part_no=" +
+		                        to_string(write_buffer->part_no) + " single=" +
+		                        (single_upload ? "true" : "false") + " error=" + ex.what());
 		if (single_upload) {
 			throw;
 		}
@@ -189,6 +217,8 @@ void S3MultiPartUpload::FlushBuffer(shared_ptr<S3WriteBuffer> write_buffer) {
 	if (write_buffer->idx == 0) {
 		return;
 	}
+	AppendPartitionWriteLog("[S3][Multipart] flush_buffer path=" + path + " part_no=" +
+	                        to_string(write_buffer->part_no) + " bytes=" + to_string(write_buffer->idx));
 
 	auto uploading = write_buffer->uploading.load();
 	if (uploading) {

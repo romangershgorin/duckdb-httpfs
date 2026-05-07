@@ -24,9 +24,17 @@
 #include "s3_access_grants_state.hpp"
 
 #include <iostream>
-#include <iostream>
+#include <fstream>
 
 namespace duckdb {
+
+static void AppendPartitionWriteLog(const string &message) {
+	std::ofstream log_file("/home/duckdbuser/log.txt", std::ios::app);
+	if (!log_file.good()) {
+		return;
+	}
+	log_file << message << std::endl;
+}
 
 shared_ptr<S3AccessGrantsState> S3AccessGrantsState::TryGetState(ClientContext &context) {
 	return context.registered_state->GetOrCreate<S3AccessGrantsState>("s3_access_grants_state");
@@ -353,10 +361,14 @@ bool GetDataAccess(HTTPParams &http_params, S3AuthParams &auth_params, const str
 void UpdateCredentialsFromAccessGrants(HTTPParams &http_params, S3AuthParams &auth_params, const string &method,
                                        const string &url, const shared_ptr<S3AccessGrantsState> &state) {
 	if (!auth_params.s3_access_grants_enabled || !state) {
+		AppendPartitionWriteLog("[S3][AccessGrants] skipped method=" + method + " url=" + url +
+		                        " enabled=" + (auth_params.s3_access_grants_enabled ? "true" : "false") +
+		                        " has_state=" + (state ? "true" : "false"));
 		return;
 	}
 
 	if (auth_params.region.empty()) {
+		AppendPartitionWriteLog("[S3][AccessGrants] missing_region method=" + method + " url=" + url);
 		throw Exception(ExceptionType::INVALID_CONFIGURATION, "You must specify a region");
 	}
 
@@ -365,8 +377,11 @@ void UpdateCredentialsFromAccessGrants(HTTPParams &http_params, S3AuthParams &au
 		operation = "READ";
 	}
 	string access_key_id, secret_access_key, session_token;
-	if (GetDataAccess(http_params, auth_params, operation, url, access_key_id, secret_access_key, session_token,
-	                  *state)) {
+	bool updated = GetDataAccess(http_params, auth_params, operation, url, access_key_id, secret_access_key,
+	                             session_token, *state);
+	AppendPartitionWriteLog("[S3][AccessGrants] request method=" + method + " operation=" + operation + " url=" +
+	                        url + " updated=" + (updated ? "true" : "false"));
+	if (updated) {
 		auth_params.access_key_id = access_key_id;
 		auth_params.secret_access_key = secret_access_key;
 		auth_params.session_token = session_token;
@@ -798,6 +813,8 @@ unique_ptr<HTTPResponse> S3FileSystem::PostRequest(HTTPInput &input, string url,
                                                    char *buffer_in, idx_t buffer_in_len, string http_params) {
 	auto &s3_input = input.Cast<S3HTTPInput>();
 	auto auth_params = s3_input.auth_params;
+	AppendPartitionWriteLog("[S3][PostRequest] url=" + url + " query=" + http_params +
+	                        " payload_bytes=" + to_string(buffer_in_len));
 	auto parsed_s3_url = S3UrlParse(url, auth_params);
 	string http_url = parsed_s3_url.GetHTTPUrl(auth_params, http_params);
 
@@ -822,6 +839,8 @@ unique_ptr<HTTPResponse> S3FileSystem::PutRequest(HTTPInput &input, string url, 
                                                   idx_t buffer_in_len, string http_params) {
 	auto &s3_input = input.Cast<S3HTTPInput>();
 	auto auth_params = s3_input.auth_params;
+	AppendPartitionWriteLog("[S3][PutRequest] url=" + url + " query=" + http_params +
+	                        " payload_bytes=" + to_string(buffer_in_len));
 	auto parsed_s3_url = S3UrlParse(url, auth_params);
 	string http_url = parsed_s3_url.GetHTTPUrl(auth_params, http_params);
 	auto content_type = "application/octet-stream";
@@ -1116,6 +1135,8 @@ void S3FileSystem::RemoveFiles(const vector<string> &paths, optional_ptr<FileOpe
 
 		for (idx_t batch_start = 0; batch_start < keys.size(); batch_start += MAX_KEYS_PER_REQUEST) {
 			idx_t batch_end = MinValue<idx_t>(batch_start + MAX_KEYS_PER_REQUEST, keys.size());
+			AppendPartitionWriteLog("[S3][RemoveFiles] bucket=" + bucket + " batch_start=" + to_string(batch_start) +
+			                        " batch_end=" + to_string(batch_end));
 
 			std::stringstream xml_body;
 			xml_body << "<?xml version=\"1.0\" encoding=\"UTF-8\"?>";
@@ -1163,6 +1184,8 @@ void S3FileSystem::RemoveFiles(const vector<string> &paths, optional_ptr<FileOpe
 			string result;
 			auto res = HTTPFileSystem::PostRequest(http_input, http_url, headers, result,
 			                                       const_cast<char *>(body.data()), body.length());
+			AppendPartitionWriteLog("[S3][RemoveFiles] delete_status=" + to_string(static_cast<int>(res->status)) +
+			                        " target=" + access_grants_target_url);
 
 			if (res->status != HTTPStatusCode::OK_200) {
 				throw IOException("Failed to remove files: HTTP %d (%s)\n%s", static_cast<int>(res->status),
@@ -1189,11 +1212,14 @@ void S3FileSystem::RemoveDirectory(const string &path, optional_ptr<FileOpener> 
 
 void S3FileSystem::FileSync(FileHandle &handle) {
 	auto &s3fh = handle.Cast<S3FileHandle>();
+	AppendPartitionWriteLog("[S3][FileSync] path=" + s3fh.path + " offset=" + to_string(s3fh.file_offset));
 	s3fh.FinalizeUpload();
 }
 
 void S3FileSystem::Write(FileHandle &handle, void *buffer, int64_t nr_bytes, idx_t location) {
 	auto &s3fh = handle.Cast<S3FileHandle>();
+	AppendPartitionWriteLog("[S3][Write] path=" + s3fh.path + " bytes=" + to_string(nr_bytes) +
+	                        " location=" + to_string(location));
 	if (!s3fh.flags.OpenForWriting()) {
 		throw InternalException("Write called on file not opened in write mode");
 	}
