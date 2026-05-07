@@ -1171,7 +1171,7 @@ void S3FileSystem::RemoveFiles(const vector<string> &paths, optional_ptr<FileOpe
 			auto access_grants_state = S3AccessGrantsState::TryGetState(opener);
 			S3HTTPInput http_input(std::move(http_params), auth_params, S3ConfigParams::ReadFrom(opener),
 			                       access_grants_state);
-			UpdateCredentialsFromAccessGrants(*http_input.http_params, auth_params, "POST", access_grants_target_url,
+			UpdateCredentialsFromAccessGrants(http_input.http_params, auth_params, "POST", access_grants_target_url,
 			                                 http_input.access_grants_state);
 
 			auto headers =
