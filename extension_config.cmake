@@ -21,5 +21,5 @@ duckdb_extension_load(avro
 
 duckdb_extension_load(iceberg
 	GIT_URL https://github.com/romangershgorin/duckdb-iceberg
-	GIT_TAG b9bd61fb04376308e0fbb143512e4775af11c7b3
+	GIT_TAG 9f13146ea8fe2655ef1a5cdae869e2e756525010
 )
